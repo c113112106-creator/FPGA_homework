@@ -1,0 +1,462 @@
+`timescale 1ns / 1ps
+
+module top_pwmgo(
+	input clk,rst,
+	input change,
+	input change_fast,
+	output led_go/*,
+	output hsync,vsync,
+	output [3:0] vga_r,vga_g,vga_b*/
+);
+	wire [3:0] state_ref,state_fast;
+	wire [7:0] frequency,duty;
+	wire change_set,vga_clk,light_clk,change_fast_set;
+	
+	button U0(
+		.click(change_set),
+		.btn(change),
+		.clk(clk),
+		.rst(rst)
+	);
+	
+	button U1(
+		.click(change_fast_set),
+		.btn(change_fast),
+		.clk(clk),
+		.rst(rst)
+	);
+	
+	division U2(
+		.rst(rst),
+		.vga_clk(vga_clk),
+		.clk(clk)
+	);
+	
+	light_fast U3(
+		.change_fast_set(change_fast_set),
+		.light_clk(light_clk),
+		.state_fast(state_fast),
+		.clk(clk),
+		.state_ref(state_ref),
+		.rst(rst)
+	);
+	
+	frequency_state U4(
+		.clk(clk),
+		.rst(rst),
+		.state_ref(state_ref),
+		.change_set(change_set),
+		.frequency(frequency)
+	);	
+	
+	pwm U6(
+		.clk(clk),
+		.rst(rst),
+		.pwm_out(led_go),
+		.duty(duty)
+	);
+	
+	duty_countrol U7(
+		.rst(rst),
+		.duty(duty),
+		.frequency(frequency),
+		.light_clk(light_clk)
+	);
+	/*vga U8(
+		.state_ref(state_ref),
+		.state_fast(state_fast),
+		.clk(vga_clk),
+		.rst(rst),
+		.hsync(hsync),
+		.vsync(vsync),
+		.vga_r(vga_r),
+		.vga_g(vga_g),
+		.vga_b(vga_b)
+	);*/
+endmodule
+
+module light_fast(
+	input clk,rst,
+	input change_fast_set,
+	input [3:0]state_ref,
+	output reg [3:0]state_fast,
+	output reg  light_clk
+	);
+	reg [27:0]countclk;
+	parameter base=5'd14;///////////////////////////////////////////
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			light_clk<=0;
+		end
+		else begin
+			case(state_ref)
+				4'd0:begin
+					light_clk=countclk[base+0+state_fast];
+				end
+				4'd1:begin
+					light_clk=countclk[base+1+state_fast];;
+				end
+				4'd2:begin
+					light_clk=countclk[base+2+state_fast];;
+				end
+				4'd3:begin
+					light_clk=countclk[base+3+state_fast];;
+				end
+				4'd4:begin
+					light_clk=countclk[base+4+state_fast];;
+				end
+				4'd5:begin
+					light_clk=countclk[base+5+state_fast];;
+				end
+				default:begin
+					light_clk=countclk[base+0+state_fast];
+				end
+			endcase
+		end
+	end
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			countclk<=28'd0;
+		end
+		else begin
+			countclk <= countclk+28'd1;
+		end
+	end
+	
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			state_fast<=4'd0;
+		end
+		else begin
+			if(change_fast_set)begin
+				state_fast<=state_fast+1;
+				if(state_fast>=4'd5)begin
+					state_fast<=4'd0;
+				end
+			end
+			else begin
+				state_fast<=state_fast;
+			end
+		end
+	end
+endmodule
+
+module frequency_state(
+	input clk,rst,
+	input change_set,
+	output reg [3:0]state_ref,
+	output reg [7:0]frequency
+	);
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			state_ref<=4'd0;
+		end
+		else begin
+			if(change_set)begin
+				state_ref<=state_ref+1;
+				if(state_ref>=4'd5)begin
+					state_ref<=4'd0;
+				end
+			end
+			else begin
+				state_ref<=state_ref;
+			end
+		end
+	end
+	always@(*)begin
+		if(rst)begin
+			frequency=8'd1;
+		end
+		else begin
+			case(state_ref)
+				4'd0:begin
+					frequency=8'd1;
+				end
+				4'd1:begin
+					frequency=8'd2;
+				end
+				4'd2:begin
+					frequency=8'd4;
+				end
+				4'd3:begin
+					frequency=8'd8;
+				end
+				4'd4:begin
+					frequency=8'd16;
+				end
+				4'd5:begin
+					frequency=8'd32;
+				end
+				default:begin
+					frequency=8'd1;
+				end
+			endcase
+		end
+	end
+endmodule
+
+module duty_countrol(
+    input rst,
+	input light_clk,
+	input [7:0] frequency,
+    output reg [7:0] duty
+	);
+	parameter lighter =1'd0,
+			  darker  =1'd1;
+	reg state;
+	always @(posedge light_clk or posedge rst) begin
+		if (rst) begin
+            duty<=8'd255;
+			state<=darker;
+        end
+        else begin
+			case(state)
+				darker:begin
+					if(duty >=frequency)begin
+						duty<=duty-frequency;
+					end
+					else begin
+						duty<=8'd0;
+						state<=lighter;
+					end
+				end
+				lighter:begin
+					if(duty<=8'd255-frequency)begin
+						duty<=duty+frequency;
+					end
+					else begin
+						state<=darker;
+						duty<=8'd255;
+					end
+				end
+				default:begin
+					state<=state;
+					duty<=duty;
+				end
+			endcase
+		end
+	end
+endmodule
+
+module pwm(
+    input clk,
+    input rst,
+    input [7:0] duty,
+    output reg pwm_out
+	);
+    reg [7:0] counter;
+
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            counter <= 8'd0;
+            pwm_out <= 1'b0;
+        end
+        else begin
+            if (counter >= 8'd255)
+                counter <= 8'd0;
+            else
+                counter <= counter + 1;
+
+            if (counter < duty)
+                pwm_out <= 1'b1;
+            else
+                pwm_out <= 1'b0;
+        end
+    end
+endmodule
+
+module division(
+	input clk,rst,
+	output vga_clk
+	);
+	reg [27:0]cnt;
+	assign vga_clk=cnt[1];///////////////////
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			cnt<=28'd0;
+		end
+		else begin
+			cnt <= cnt+28'd1;
+		end
+	end
+endmodule
+
+module button(
+	input clk,rst,btn,
+	output click
+	);
+	reg [23:0]decnt;
+	reg sig_dly,sig;
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			sig<=0;
+			decnt<=0;
+		end
+		else begin
+			if(btn==1'b1)begin
+				if(decnt<24'hFFFFFF)begin
+					decnt<=decnt+24'd1;
+					sig<=1'b0;
+				end
+				else begin
+					decnt<=decnt;
+					sig<=1'b1;
+				end
+			end
+			else begin
+				decnt<=24'd0;
+				sig<=1'b0;
+			end
+		end
+	end
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			sig_dly<=1'b0;
+		end
+		else begin
+			sig_dly<=sig;
+		end
+	end
+	assign click=sig&~sig_dly;
+endmodule
+
+
+/*module vga(
+	input clk,rst,
+	input [3:0] state_fast,
+	input [3:0] state_ref,
+	output hsync,vsync,
+	output reg [3:0] vga_r,vga_g,vga_b
+	);
+	parameter   H_SYNC=96,
+				H_SYNC_BACK_Porch=48,
+				H_SYNC_ADDERSSABLE_VIDEO=630,
+				H_SYNC_FRONT_PORCH=26,
+				H_SYNC_PERIOD=H_SYNC+H_SYNC_ADDERSSABLE_VIDEO+H_SYNC_BACK_Porch+H_SYNC_FRONT_PORCH;
+				
+	parameter   V_SYNC=2,
+				V_SYNC_BACK_Porch=33,
+				V_SYNC_ADDERSSABLE_VIDEO_1=240,
+				V_SYNC_ADDERSSABLE_VIDEO=480,
+				V_SYNC_FRONT_PORCH=10,
+				V_SYNC_PERIOD=V_SYNC+V_SYNC_ADDERSSABLE_VIDEO+V_SYNC_BACK_Porch+V_SYNC_FRONT_PORCH;
+	reg [9:0] h_counter,v_counter;
+	reg [2:0] go_mode;
+
+	wire valid_flag;
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			h_counter<=10'd0;
+		end
+		else begin
+			if((h_counter==H_SYNC_PERIOD-1))begin
+				h_counter<=10'd0;
+			end
+			else begin
+				h_counter<=h_counter+10'd1;
+			end
+		end
+	end
+	
+	always@(*)begin
+		if(rst)begin
+			go_mode=3'd0;
+		end
+		else begin
+			if(h_counter>=(H_SYNC+H_SYNC_BACK_Porch)+0 && h_counter<(H_SYNC+H_SYNC_BACK_Porch)+104)begin
+				go_mode=3'd0;
+			end
+			else if(h_counter>=(H_SYNC+H_SYNC_BACK_Porch)+104 && h_counter<(H_SYNC+H_SYNC_BACK_Porch)+209)begin
+				go_mode=3'd1;
+			end
+			else if(h_counter>=(H_SYNC+H_SYNC_BACK_Porch)+209 && h_counter<(H_SYNC+H_SYNC_BACK_Porch)+314)begin
+				go_mode=3'd2;
+			end
+			else if(h_counter>=(H_SYNC+H_SYNC_BACK_Porch)+314 && h_counter<(H_SYNC+H_SYNC_BACK_Porch)+419)begin
+				go_mode=3'd3;
+			end
+			else if(h_counter>=(H_SYNC+H_SYNC_BACK_Porch)+419 && h_counter<(H_SYNC+H_SYNC_BACK_Porch)+524)begin
+				go_mode=3'd4;
+			end
+			else if(h_counter>=(H_SYNC+H_SYNC_BACK_Porch)+524 && h_counter<(H_SYNC+H_SYNC_BACK_Porch)+629)begin
+				go_mode=3'd5;
+			end
+			else begin
+				go_mode=3'd6;
+			end
+		end
+	end
+	
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			v_counter<=10'd0;
+		end
+		else begin
+			if((v_counter==V_SYNC_PERIOD-1)&&(h_counter==H_SYNC_PERIOD-1))begin
+				v_counter<=10'd0;
+			end
+			else begin
+				if(h_counter==H_SYNC_PERIOD-1)begin
+					v_counter<=v_counter+10'd1;
+				end
+				else begin
+				v_counter<=v_counter;
+				end
+			end
+		end
+	end
+	
+	always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            vga_r <= 4'h0;
+            vga_g <= 4'h0;
+            vga_b <= 4'h0;
+        end
+        else begin
+            if (!valid_flag) begin
+
+                vga_r <= 4'h0;
+                vga_g <= 4'h0;
+                vga_b <= 4'h0;
+            end
+            // =================================================
+            // 上半部：state_fast
+            // =================================================
+            else if (v_counter < V_SYNC + V_SYNC_BACK_Porch + 240) begin
+                if (state_fast >= go_mode) begin
+                    // 黃色
+                    vga_r <= 4'hf;
+                    vga_g <= 4'hf;
+                    vga_b <= 4'h0;
+                end
+                else begin
+                    // 黑色
+                    vga_r <= 4'h0;
+                    vga_g <= 4'h0;
+                    vga_b <= 4'h0;
+                end
+            end
+            // =================================================
+            // 下半部：state_ref
+            // =================================================
+            else begin
+                if (state_ref >= go_mode) begin
+                    // 藍色
+                    vga_r <= 4'h0;
+                    vga_g <= 4'h0;
+                    vga_b <= 4'hf;
+                end
+                else begin
+                    // 黑色
+                    vga_r <= 4'h0;
+                    vga_g <= 4'h0;
+                    vga_b <= 4'h0;
+                end
+            end
+        end
+    end
+	assign hsync=(h_counter<=H_SYNC-1'b1)?1'b1:1'b0;
+	assign vsync=(v_counter<=V_SYNC-1'b1)?1'b1:1'b0;
+	assign valid_flag=(h_counter>=(H_SYNC+H_SYNC_BACK_Porch))&&(h_counter<=(H_SYNC+H_SYNC_BACK_Porch+H_SYNC_ADDERSSABLE_VIDEO))&&
+	(v_counter>=(V_SYNC+V_SYNC_BACK_Porch))&&(v_counter<=(V_SYNC+V_SYNC_BACK_Porch+V_SYNC_ADDERSSABLE_VIDEO));
+endmodule*/
